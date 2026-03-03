@@ -28,6 +28,16 @@ db.exec(`
     short_id TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('sub_token', 'default-token');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('routing_mode', 'rule');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('update_interval', '24');
+  INSERT OR IGNORE INTO settings (key, value) VALUES ('dns_server', '1.1.1.1');
 `);
 
 async function startServer() {
@@ -65,8 +75,38 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  // Settings Endpoints
+  app.get("/api/settings", (req, res) => {
+    const settingsRows = db.prepare("SELECT * FROM settings").all();
+    const settings = settingsRows.reduce((acc: any, row: any) => {
+      acc[row.key] = row.value;
+      return acc;
+    }, {});
+    res.json(settings);
+  });
+
+  app.post("/api/settings", (req, res) => {
+    const updates = req.body;
+    const stmt = db.prepare("UPDATE settings SET value = ? WHERE key = ?");
+    
+    const transaction = db.transaction((updates) => {
+      for (const [key, value] of Object.entries(updates)) {
+        stmt.run(String(value), key);
+      }
+    });
+    
+    transaction(updates);
+    res.json({ success: true });
+  });
+
   // Universal Subscription Endpoint
   app.get("/sub/:token", (req, res) => {
+    // Verify token
+    const tokenSetting = db.prepare("SELECT value FROM settings WHERE key = 'sub_token'").get() as any;
+    if (tokenSetting && tokenSetting.value !== req.params.token) {
+      return res.status(403).send("Forbidden");
+    }
+
     const nodes = db.prepare("SELECT * FROM nodes").all();
     
     const subContent = nodes.map(node => {
